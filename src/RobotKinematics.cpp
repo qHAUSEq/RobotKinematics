@@ -1,4 +1,16 @@
 #include "RobotKinematics.h"
+// Защита от отсутствия <immintrin.h> на неподдерживаемых платформах
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #if AVX_SUP == 1
+        #include <immintrin.h> // Для AVX
+    #endif
+#endif
+
+// По-хорошему должно выноситься в отдельный файл Tools/Utils, но используется только в данном файле, поэтому применяется static
+static constexpr double abs_constexpr(double x) {
+    return x < 0 ? -x : x;
+}
+static constexpr double PI = 3.14159265358979323846;
 
 RobotKinematics::RobotKinematics(QObject *parent) : QObject(parent)
 {
@@ -18,7 +30,7 @@ QVector3D RobotKinematics::calculatePosition(const QList<double> &jointAnglesDeg
         qWarning() << "Expected 6 joint angles!";
         return QVector3D(0, 0, 0);
     }
-#ifdef USE_AVX
+#if AVX_SUP == 1
     alignas(32) Matrix4x4 T = {{
         {1, 0, 0, 0},
         {0, 1, 0, 0},
@@ -37,7 +49,7 @@ QVector3D RobotKinematics::calculatePosition(const QList<double> &jointAnglesDeg
     for (int i = 0; i < 6; ++i) {
         double theta = degToRad(jointAnglesDeg[i]);
         const DHParams &p = dhParams[i];
-#ifdef USE_AVX
+#if AVX_SUP == 1
         alignas(32) Matrix4x4 Ti = {{
             {cos(theta), -sin(theta)*cos(p.alpha), sin(theta)*sin(p.alpha), p.a * cos(theta)},
             {sin(theta), cos(theta)*cos(p.alpha), -cos(theta)*sin(p.alpha), p.a * sin(theta)},
@@ -61,11 +73,11 @@ QVector3D RobotKinematics::calculatePosition(const QList<double> &jointAnglesDeg
 }
 
 constexpr double RobotKinematics::degToRad(double deg) const {
-    return deg * M_PI / 180.0;
+    return deg * PI / 180.0;
 }
 
-#ifdef USE_AVX
 void RobotKinematics::multiplyMatrices(Matrix4x4& fMatrix, Matrix4x4&& sMatrix) {
+#if AVX_SUP == 1
     alignas(32) std::array<std::array<double, 4>, 4> temp = {0.0};
 
     for (int i = 0; i < 4; ++i) {
@@ -85,10 +97,10 @@ void RobotKinematics::multiplyMatrices(Matrix4x4& fMatrix, Matrix4x4&& sMatrix) 
             fMatrix[i][j] = temp[i][j];
         }
     }
-}
+
 #else
-void RobotKinematics::multiplyMatrices(Matrix4x4& fMatrix, Matrix4x4&& sMatrix) {
-    Matrix4x4 result = {0};
+
+    Matrix4x4 result;
 
     for (size_t i = 0; i < 4; ++i) {
         for (size_t j = 0; j < 4; ++j) {
@@ -99,19 +111,17 @@ void RobotKinematics::multiplyMatrices(Matrix4x4& fMatrix, Matrix4x4&& sMatrix) 
         }
     }
     fMatrix = result;
-}
-#endif
 
-constexpr void RobotKinematics::roundMatrix(Matrix4x4& matrix, double threshold) {
+#endif
+}
+
+void RobotKinematics::roundMatrix(Matrix4x4& matrix) {
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
-            matrix[i][j] = roundSmallValues(matrix[i][j], threshold);
+            matrix[i][j] = roundValue(matrix[i][j]);
         }
     }
 }
-constexpr double RobotKinematics::roundSmallValues(double value, double threshold) {
-    if (std::fabs(value) < threshold) {
-        return 0.0;
-    }
-    return value; // Если нужно сократить количество чисел после запятой std::round(value * std::pow(10, precision)) / std::pow(10, precision).
+constexpr double RobotKinematics::roundValue(double value) const {
+    return (abs_constexpr(value) < threshold) ? 0.0 : value; // Если нужно сократить количество чисел после запятой: std::round(value * std::pow(10, precision)) / std::pow(10, precision).;
 }
